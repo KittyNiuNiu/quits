@@ -13,6 +13,10 @@ for and nothing to install.
 > (SPEC §11.3), and SPEC §10 does not consider the project finished until it
 > is reachable from a public URL.
 
+![Start page](./images/Start.png)
+![Add an expense](./images/Add%20an%20expense.png)
+![Balance](./images/Balance.png)
+
 ---
 
 ## Quick start
