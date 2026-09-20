@@ -1,0 +1,463 @@
+/* SPEC §10: mobile-first. The primary situation is someone standing at a
+   restaurant table on a phone; desktop is a secondary, responsive case. */
+
+:root {
+  /* The palette, as given. Every colour below is one of these five or a
+     darkened variant of one, kept only where the pastel itself is too light to
+     carry text. */
+  --sun: #f6bd60;
+  --cream: #f7ede2;
+  --blush: #f5cac3;
+  --sage: #84a59d;
+  --coral: #f28482;
+
+  /* Surfaces */
+  --ground: var(--cream);
+  --paper: #fffcf8;
+
+  /* Text. A warm near-black rather than a blue-grey, so it sits in the same
+     family as the cream ground. 12.3:1 on the page, 13:1 on a card. */
+  --ink: #2f2a26;
+  --ink-soft: #6b615a;
+  --ink-faint: #756a62;
+
+  /* Lines. --line is decorative; --line-strong bounds form controls and is
+     dark enough to clear the 3:1 that a control boundary needs. */
+  --line: #ecdfd3;
+  --line-strong: #9c8b7d;
+
+  /* Primary. --sage is 2.7:1 against white, so white-on-sage would fail for
+     buttons and active tabs. --brand is sage darkened to 5.4:1; the pastel
+     itself stays for tints and borders. */
+  --brand: #4f7168;
+  --brand-dark: #3f5c55;
+  --brand-tint: #e4ede9;
+  --brand-line: #bcd2cb;
+
+  /* Owing and destructive. --coral darkened the same way, to 5.4:1 on a card
+     and 4.6:1 on its own tint. */
+  --owed: #b8433d;
+  --owed-tint: #fceae8;
+  --owed-line: #eebab6;
+
+  /* Unfinished, not wrong: an amount still to assign is amber rather than red,
+     since the server is the thing that actually rejects it. */
+  --warn: #8a5d16;
+  --warn-tint: #fdf1dc;
+  --warn-line: var(--sun);
+
+  /* Blush carries the friendly, non-semantic surfaces: who you are, category
+     tags. */
+  --blush-tint: #fdf2ef;
+
+  --scrim: rgba(47, 42, 38, 0.5);
+
+  --radius: 12px;
+  --tap: 44px;
+
+  color-scheme: light;
+  /* Geist is the typeface Vercel uses. The stack behind it is what renders if
+     the webfont does not load. */
+  font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  font-optical-sizing: auto;
+  color: var(--ink);
+}
+
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+
+button { font: inherit; }
+input, select { font: inherit; color: inherit; }
+
+.page {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 0 1rem calc(3rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* --- type ---------------------------------------------------------------- */
+
+h1 { font-size: 1.5rem; margin: 0; font-weight: 600; letter-spacing: -0.03em; }
+h2 { font-size: 1.05rem; margin: 0 0 0.75rem; font-weight: 600; letter-spacing: -0.02em; }
+h3 { font-size: 0.95rem; margin: 0 0 0.5rem; font-weight: 600; letter-spacing: -0.02em; }
+
+.muted { color: var(--ink-soft); }
+.faint { color: var(--ink-faint); font-size: 0.85rem; }
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* --- app header ---------------------------------------------------------- */
+
+.app-header {
+  padding: calc(1.25rem + env(safe-area-inset-top, 0px)) 0 0.75rem;
+}
+
+.brand {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.trip-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.4rem;
+}
+
+.trip-total {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- cards --------------------------------------------------------------- */
+
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.notice {
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  font-size: 0.875rem;
+  margin-bottom: 0.75rem;
+}
+.notice-warn { background: var(--warn-tint); border: 1px solid var(--warn-line); }
+.notice-info { background: var(--paper); border: 1px solid var(--line); color: var(--ink-soft); }
+.notice-error { background: var(--owed-tint); border: 1px solid var(--owed-line); color: var(--owed); }
+
+/* --- forms --------------------------------------------------------------- */
+
+.field { margin-bottom: 0.85rem; }
+
+.field > label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  margin-bottom: 0.3rem;
+}
+
+/* Direct children only. The per-participant inputs in the split editor live in
+   a list nested inside a .field, and a descendant selector here would win on
+   specificity and stretch them to the full row width. */
+.field > input[type='text'],
+.field > input[type='date'],
+.field > select {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+.field input:focus-visible,
+.field select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+.field-error { color: var(--owed); font-size: 0.8rem; margin-top: 0.3rem; }
+.field input[aria-invalid='true'] { border-color: var(--owed); }
+
+.field-hint { font-size: 0.8rem; color: var(--ink-faint); margin-top: 0.3rem; }
+
+.row { display: flex; gap: 0.6rem; }
+.row > * { flex: 1; min-width: 0; }
+
+/* --- buttons ------------------------------------------------------------- */
+
+.btn {
+  min-height: var(--tap);
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: var(--ground); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) { background: var(--brand-dark); }
+
+.btn-danger { color: var(--owed); border-color: var(--owed-line); }
+.btn-danger:hover:not(:disabled) { background: var(--owed-tint); }
+
+.btn-block { width: 100%; }
+
+.btn-link {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.btn-small { min-height: 36px; padding: 0.3rem 0.7rem; font-size: 0.85rem; }
+
+.btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* --- identity bar -------------------------------------------------------- */
+
+.identity-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  background: var(--blush-tint);
+  border: 1px solid var(--blush);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+/* --- tabs ---------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.tab {
+  flex: 1;
+  min-height: 40px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--ink-soft);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.tab[aria-selected='true'] { background: var(--brand); color: #fff; }
+
+/* --- lists --------------------------------------------------------------- */
+
+.list { list-style: none; margin: 0; padding: 0; }
+
+.list > li + li { border-top: 1px solid var(--line); }
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+}
+.item:first-child { padding-top: 0; }
+
+.item-main { min-width: 0; }
+.item-title { font-weight: 600; }
+.item-meta { font-size: 0.82rem; color: var(--ink-soft); }
+.item-amount { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.empty {
+  text-align: center;
+  color: var(--ink-faint);
+  padding: 1.5rem 0.5rem;
+  font-size: 0.9rem;
+}
+
+/* --- balances ------------------------------------------------------------ */
+
+.balance-line { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.6rem 0; }
+.balance-line + .balance-line { border-top: 1px solid var(--line); }
+
+.amount-positive { color: var(--brand); font-weight: 700; font-variant-numeric: tabular-nums; }
+.amount-negative { color: var(--owed); font-weight: 700; font-variant-numeric: tabular-nums; }
+.amount-settled { color: var(--ink-faint); font-weight: 600; }
+
+.transfer { padding: 0.6rem 0; display: flex; justify-content: space-between; gap: 0.75rem; }
+.transfer + .transfer { border-top: 1px solid var(--line); }
+
+/* --- split editor -------------------------------------------------------- */
+
+.split-mode { display: flex; gap: 0.35rem; }
+
+.split-mode button {
+  flex: 1;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--paper);
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.split-mode button[aria-pressed='true'] {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.split-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  min-height: var(--tap);
+}
+.split-row + .split-row { border-top: 1px solid var(--line); }
+
+.split-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.split-row input[type='checkbox'] { width: 20px; height: 20px; flex: none; accent-color: var(--brand); }
+
+.split-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.split-input {
+  width: 6.5rem;
+  flex: 0 1 6.5rem;
+  min-width: 4.5rem;
+  min-height: 38px;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.split-input:disabled { background: var(--ground); color: var(--ink-faint); }
+
+.split-derived {
+  width: 6.5rem;
+  flex: none;
+  text-align: right;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+
+/* SPEC §7.13 and §7.14: without the live "left to assign" indicator these
+   modes are unusable, so it is a permanent part of the editor, not an error. */
+.assign-indicator {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 9px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.assign-ok { background: var(--brand-tint); color: var(--brand-dark); }
+.assign-off { background: var(--warn-tint); color: var(--warn); }
+
+/* --- share --------------------------------------------------------------- */
+
+.share-link {
+  display: block;
+  width: 100%;
+  margin-bottom: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--ground);
+  font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+/* --- modal --------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 10;
+}
+
+.modal {
+  background: var(--paper);
+  border-radius: 16px;
+  padding: 1.1rem;
+  width: 100%;
+  max-width: 34rem;
+  max-height: 88vh;
+  overflow-y: auto;
+  margin-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+@media (min-width: 40rem) {
+  .modal-backdrop { align-items: center; }
+}
+
+/* --- misc ---------------------------------------------------------------- */
+
+.category-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  background: var(--blush-tint);
+  border: 1px solid var(--blush);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  color: var(--ink-soft);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,0 +1,972 @@
+openapi: 3.1.0
+
+info:
+  title: Quits API
+  version: 1.0.0
+  summary: Backend contract expected by the Quits frontend.
+  description: |
+    The HTTP backend that `frontend/src/services/httpBackend.js` is written
+    against. It is derived from that client and from the in-browser reference
+    implementation in `frontend/src/services/mockBackend.js`, which enforces
+    every rule below.
+
+    `_docs/SPEC.md` is authoritative. Section references below point into it.
+
+    ## Authentication
+
+    There is none, in the usual sense, and this is deliberate (SPEC §2).
+
+    - There are no accounts, no login, no sessions, no passwords and no roles.
+    - **Possession of the trip token is the only credential.** It is a path
+      segment, not a header or a cookie. The client sends no `Authorization`
+      header, no cookie and no API key on any request.
+    - Anyone holding a trip's token has full read and write access to that
+      trip, including editing and deleting expenses they did not enter.
+    - The trip creator has no elevated rights after creation.
+
+    Consequently there are exactly two access tiers:
+
+    | Endpoint | Credential |
+    |---|---|
+    | `POST /api/trips` | None. Fully public — this is how a token is obtained. |
+    | Everything under `/api/trips/{token}` | The `token` path parameter. |
+
+    This is **not** expressible as an OpenAPI `securityScheme`: `apiKey`
+    supports `header`, `query` and `cookie`, but not `path`. Declaring one
+    would describe a credential the client never sends. So no
+    `securitySchemes` block appears here, and each protected operation says so
+    in its description instead. Treat "has a valid `token` in the path" as the
+    authorization check, and apply it to every operation under
+    `/api/trips/{token}`.
+
+    Every operation therefore declares `security: []`. In OpenAPI terms that
+    is accurate — no scheme-bearing credential is transmitted on any request —
+    but it does **not** mean the endpoint is open. Read the per-operation
+    description for what guards it.
+
+    Implementation notes that follow from putting the credential in the path:
+
+    - An unknown or malformed token returns `404` with code `not_found`. Do not
+      distinguish "no such trip" from "not allowed" — there are no roles, so
+      there is nothing else it could be.
+    - The token appears in request paths, so keep it out of access logs, error
+      reports and anything that forwards a `Referer`.
+    - Tokens are issued by the server: cryptographically random, at least 128
+      bits, URL-safe (SPEC §4).
+
+    ## Money
+
+    Every monetary value in this API is an **integer number of cents**
+    (SPEC §5). No endpoint accepts or returns a floating-point amount.
+    Percentages are integer **basis points**: `3333` means 33.33%, and a
+    percent split must sum to exactly `10000`.
+
+    When the server resolves a split it must use the largest-remainder
+    algorithm from SPEC §5: floor shares first, then leftover cents one each in
+    descending order of fractional remainder, ties broken by **ascending
+    participant `createdAt`**. The frontend previews splits with the same
+    algorithm, so a backend that rounds differently will show one number in the
+    form and store another.
+
+    ## Ordering
+
+    These orderings are part of the contract, not cosmetic:
+
+    - `participants` — ascending `createdAt`. This is the canonical order the
+      rounding tie-break depends on. Two participants created in the same
+      millisecond must still have a stable order; use the insertion sequence or
+      primary key as a secondary sort.
+    - `expenses` — newest first, descending `createdAt` (SPEC §7.17).
+    - `balances` — same order as `participants`.
+    - `splits` within an expense — canonical participant order.
+
+    ## Errors
+
+    Every non-2xx response carries the same JSON body: `code`, `message` and
+    optional `details`. **The client dispatches on `code`, never on the HTTP
+    status**, and shows `message` to the user as-is, so messages must be
+    human-readable and safe to display. The statuses given per operation are
+    the recommended ones; returning a different 4xx with the right `code` will
+    still work, but matching them keeps the API conventional.
+
+    All validation is enforced server-side (SPEC §8). The frontend performs the
+    same checks for live feedback, but never treats them as the gate.
+
+    ## Deliberately absent
+
+    There is **no** endpoint to delete a trip (SPEC §1, §7.4, §9). With a shared
+    link and no owner, one careless tap would destroy shared data irreversibly.
+    Trips are removed by a scheduled job 12 months after `lastActivityAt`, which
+    is not part of this API. Every write to a trip or its expenses must update
+    `lastActivityAt`, since that is what drives retention.
+
+    There are also no endpoints for payments or settlements. Transfers are a
+    computed view and nothing about them is stored (SPEC §6).
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+  - url: https://api.example.invalid
+    description: Production — host not yet decided (SPEC §11.3)
+
+tags:
+  - name: Trips
+    description: Creating a trip and reading its full state.
+  - name: Participants
+    description: Joining, binding a second device, renaming and removing people.
+  - name: Expenses
+    description: Adding, editing and deleting expenses.
+
+paths:
+  /api/trips:
+    post:
+      tags: [Trips]
+      operationId: createTrip
+      security: []
+      summary: Create a trip
+      description: |
+        SPEC §7.1. The only public endpoint: it requires no credential, because
+        it is what issues one.
+
+        The creator becomes participant #1. They do not pre-list anyone else —
+        everyone else joins through the returned link (SPEC §3).
+
+        The response carries the trip's secret `token`. It is returned exactly
+        once here and on subsequent reads by anyone who already holds it; there
+        is no recovery path if the caller loses it (SPEC §2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTripRequest'
+            example:
+              name: Lisbon, March
+              currencyLabel: EUR
+              creatorName: Anna
+      responses:
+        '201':
+          description: |
+            Trip created. The client accepts any 2xx.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTripResponse'
+        '422':
+          description: |
+            `trip_name_empty` — `name` is empty after trimming.
+            `name_empty` — `creatorName` is empty after trimming.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/trips/{token}:
+    parameters:
+      - $ref: '#/components/parameters/Token'
+    get:
+      tags: [Trips]
+      operationId: getTrip
+      security: []
+      summary: Read a trip in full
+      description: |
+        SPEC §7.2. **Authorization: the `token` path parameter.**
+
+        Returns everything the app renders in one document: the trip,
+        participants, expenses with their resolved splits, and the computed
+        balances, transfers and total.
+
+        Balances and transfers are computed server-side on every read and are
+        never stored (SPEC §6). The frontend does not recompute them.
+
+        No identity is required. A visitor who has not joined sees the trip
+        read-only and is asked for a name only when they try to change
+        something (SPEC §11.5).
+      responses:
+        '200':
+          description: The trip and everything in it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/trips/{token}/participants:
+    parameters:
+      - $ref: '#/components/parameters/Token'
+    post:
+      tags: [Participants]
+      operationId: joinTrip
+      security: []
+      summary: Join a trip under a new name
+      description: |
+        SPEC §7.5. **Authorization: the `token` path parameter.**
+
+        Creates a new participant. Names are unique per trip, compared
+        case-insensitively after trimming.
+
+        A taken name is rejected outright. Do not fuzzy-match and do not ask
+        "is this you?" — the message should tell the caller to add a
+        distinguishing suffix. Someone who *is* the existing participant, on a
+        second device, uses `POST /participants/claim` instead (SPEC §3).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NameRequest'
+            example:
+              name: Max
+      responses:
+        '201':
+          description: Participant created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participant'
+        '409':
+          description: |
+            `name_taken` — another participant in this trip already uses that
+            name. `details.field` is `name`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: '`name_empty` — the name is empty after trimming.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/trips/{token}/participants/claim:
+    parameters:
+      - $ref: '#/components/parameters/Token'
+    post:
+      tags: [Participants]
+      operationId: claimParticipant
+      security: []
+      summary: Bind to an existing participant from another device
+      description: |
+        SPEC §7.6 and §3. **Authorization: the `token` path parameter.**
+
+        The "this is me on another device" path. Looks up an existing
+        participant by name — case-insensitive, trimmed — and returns it
+        **without creating anything**. This is also how someone whose browser
+        storage was cleared recovers their identity.
+
+        This endpoint is read-only despite being a POST: it must never create a
+        participant, and it does not update `lastActivityAt`.
+
+        Note for routing: register this literal path before any pattern that
+        could capture `claim` as a participant id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NameRequest'
+            example:
+              name: Max
+      responses:
+        '200':
+          description: The existing participant with that name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participant'
+        '404':
+          description: |
+            `not_found` — either the trip token is unknown, or nobody in the
+            trip uses that name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: '`name_empty` — the name is empty after trimming.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/trips/{token}/participants/{participantId}:
+    parameters:
+      - $ref: '#/components/parameters/Token'
+      - $ref: '#/components/parameters/ParticipantId'
+    patch:
+      tags: [Participants]
+      operationId: renameParticipant
+      security: []
+      summary: Rename a participant
+      description: |
+        SPEC §7.7. **Authorization: the `token` path parameter.**
+
+        Anyone with the link may rename anyone. Under this join model renaming
+        is routine, not an edge case.
+
+        The same uniqueness check as joining applies, except against the
+        participant's own current name — changing only the casing of your own
+        name is allowed.
+
+        Renaming never detaches expenses: they reference the participant id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NameRequest'
+            example:
+              name: Anna K
+      responses:
+        '200':
+          description: The renamed participant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participant'
+        '409':
+          description: '`name_taken` — another participant already uses that name.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: '`name_empty` — the name is empty after trimming.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '`not_found` — unknown trip token, or no such participant in this trip.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [Participants]
+      operationId: deleteParticipant
+      security: []
+      summary: Remove a participant
+      description: |
+        SPEC §7.8. **Authorization: the `token` path parameter.**
+
+        Permitted **only** when the participant has zero expenses as payer and
+        zero split rows. This is the mechanism for removing someone who joined
+        out of curiosity and never took part; it is not a way to rewrite
+        history, because removing someone who is on an expense would silently
+        change what everyone else owes.
+
+        When refused, `details` carries `paidCount` and `splitCount` so the
+        client can explain why. The frontend also disables the control using
+        the same counts derived from the trip view, but the server is the gate.
+      responses:
+        '204':
+          description: Removed. No body.
+        '409':
+          description: |
+            `participant_in_use` — the participant is on at least one expense.
+            `details.paidCount` and `details.splitCount` say how.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '`not_found` — unknown trip token, or no such participant in this trip.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/trips/{token}/expenses:
+    parameters:
+      - $ref: '#/components/parameters/Token'
+    post:
+      tags: [Expenses]
+      operationId: createExpense
+      security: []
+      summary: Add an expense
+      description: |
+        SPEC §7.10. **Authorization: the `token` path parameter.**
+
+        The split is resolved to integer cents at save time and those cents are
+        what get stored. `splitType` records only how the rows were produced;
+        nothing downstream reads it (SPEC §4).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseInput'
+            examples:
+              equal:
+                summary: Split equally between three people
+                value:
+                  description: Dinner at Ramiro
+                  amountCents: 10000
+                  paidBy: p_3ijg02LqmzmW
+                  date: '2026-09-20'
+                  category: food
+                  splitType: equal
+                  participantIds: [p_3ijg02LqmzmW, p_iTk6k0Zl_U0z, p_9aQ2vB1xKpLm]
+                  exactCents: {}
+                  basisPoints: {}
+                  createdBy: p_3ijg02LqmzmW
+              payerOutsideSplit:
+                summary: Anna buys the ferry tickets and does not go
+                value:
+                  description: Ferry tickets
+                  amountCents: 1700
+                  paidBy: p_3ijg02LqmzmW
+                  date: '2026-09-20'
+                  category: transport
+                  splitType: equal
+                  participantIds: [p_iTk6k0Zl_U0z, p_9aQ2vB1xKpLm]
+                  exactCents: {}
+                  basisPoints: {}
+                  createdBy: p_3ijg02LqmzmW
+              percent:
+                summary: Percent split, as integer basis points
+                value:
+                  description: Groceries
+                  amountCents: 10000
+                  paidBy: p_iTk6k0Zl_U0z
+                  date: '2026-09-20'
+                  category: null
+                  splitType: percent
+                  participantIds: [p_3ijg02LqmzmW, p_iTk6k0Zl_U0z, p_9aQ2vB1xKpLm]
+                  exactCents: {}
+                  basisPoints:
+                    p_3ijg02LqmzmW: 3333
+                    p_iTk6k0Zl_U0z: 3333
+                    p_9aQ2vB1xKpLm: 3334
+                  createdBy: p_3ijg02LqmzmW
+      responses:
+        '201':
+          description: The stored expense, with its resolved splits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+        '422':
+          $ref: '#/components/responses/ExpenseValidationFailed'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/trips/{token}/expenses/{expenseId}:
+    parameters:
+      - $ref: '#/components/parameters/Token'
+      - $ref: '#/components/parameters/ExpenseId'
+    put:
+      tags: [Expenses]
+      operationId: updateExpense
+      security: []
+      summary: Replace an expense
+      description: |
+        SPEC §7.15. **Authorization: the `token` path parameter.**
+
+        A full replacement, not a patch: every field must be sent. The splits
+        are recomputed and replaced on every save, including when `splitType`
+        changes. Participants dropped from `participantIds` lose their split
+        rows entirely.
+
+        Anyone with the link may edit any expense, including one they did not
+        enter (SPEC §2).
+
+        **`createdBy` is accepted but ignored.** The client sends the current
+        user's id in the body because it reuses the create payload, but the
+        original author must be preserved — the expense list shows
+        "added by <name>" and editing is not authorship. Validate the field if
+        you like; do not write it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseInput'
+      responses:
+        '200':
+          description: The updated expense, with freshly resolved splits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+        '422':
+          $ref: '#/components/responses/ExpenseValidationFailed'
+        '404':
+          description: '`not_found` — unknown trip token, or no such expense in this trip.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [Expenses]
+      operationId: deleteExpense
+      security: []
+      summary: Delete an expense
+      description: |
+        SPEC §7.16. **Authorization: the `token` path parameter.**
+
+        Anyone with the link may delete any expense, including ones they did
+        not enter. This is deliberate (SPEC §2). There is no confirmation step
+        in the API and no soft delete.
+
+        Removing the expense must remove its split rows too.
+      responses:
+        '204':
+          description: Deleted. No body.
+        '404':
+          description: '`not_found` — unknown trip token, or no such expense in this trip.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  parameters:
+    Token:
+      name: token
+      in: path
+      required: true
+      description: |
+        The trip's secret token, and the only credential in this API.
+        Cryptographically random, at least 128 bits, URL-safe (SPEC §4). The
+        client percent-encodes it before use.
+      schema:
+        type: string
+        minLength: 22
+      example: 9xQx0Zr4Kk2mVtJb7Hn3Lw5PcYeAfUdS
+
+    ParticipantId:
+      name: participantId
+      in: path
+      required: true
+      description: Opaque participant identifier, as returned by the API.
+      schema:
+        type: string
+      example: p_3ijg02LqmzmW
+
+    ExpenseId:
+      name: expenseId
+      in: path
+      required: true
+      description: Opaque expense identifier, as returned by the API.
+      schema:
+        type: string
+      example: e_7Kd1pQz0Rm4X
+
+  responses:
+    NotFound:
+      description: |
+        `not_found` — the trip token is unknown. Returned rather than a 401 or
+        403, because possession of the token is the only credential and there
+        is no other reason access could be denied.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    ExpenseValidationFailed:
+      description: |
+        One of the SPEC §8 rules was broken. `code` says which:
+
+        - `description_empty` — description empty after trimming
+        - `amount_not_positive` — `amountCents` is not an integer greater than
+          zero, or an entry in `exactCents` is negative
+        - `no_participants_in_split` — no valid participant in `participantIds`
+        - `exact_sum_mismatch` — the `exactCents` entries for included
+          participants do not sum to `amountCents`. `details.differenceCents`
+          is `amountCents - sum`: positive means under-assigned, negative means
+          over
+        - `percent_sum_mismatch` — the `basisPoints` entries for included
+          participants do not sum to `10000`.
+          `details.differenceBasisPoints` is `10000 - sum`
+        - `unknown_participant` — `paidBy` or `createdBy` is not a participant
+          of this trip
+        - `invalid_category` — not one of the seven fixed values
+        - `invalid_split_type` — not `equal`, `exact` or `percent`
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    CreateTripRequest:
+      type: object
+      required: [name, currencyLabel, creatorName]
+      properties:
+        name:
+          type: string
+          description: Required, non-empty after trimming. Stored trimmed.
+          example: Lisbon, March
+        currencyLabel:
+          type: string
+          description: |
+            Display string only. There is no conversion logic anywhere in the
+            product (SPEC §1, §4). Blank or whitespace defaults to `EUR`. The
+            frontend renders it as a prefix, e.g. `EUR 1,234.56`.
+          default: EUR
+          example: EUR
+        creatorName:
+          type: string
+          description: |
+            Required, non-empty after trimming. Becomes participant #1. The
+            creator gains no elevated rights from this (SPEC §2).
+          example: Anna
+
+    CreateTripResponse:
+      type: object
+      required: [trip, participant]
+      properties:
+        trip:
+          $ref: '#/components/schemas/Trip'
+        participant:
+          $ref: '#/components/schemas/Participant'
+
+    NameRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: |
+            Compared case-insensitively after trimming, and stored trimmed.
+          example: Max
+
+    Trip:
+      type: object
+      required: [id, token, name, currencyLabel, createdAt, lastActivityAt]
+      properties:
+        id:
+          type: string
+          description: Internal identifier. Not a credential and not used in any path.
+        token:
+          type: string
+          description: |
+            The secret URL token. Holding it grants full read and write access
+            to this trip.
+        name:
+          type: string
+        currencyLabel:
+          type: string
+          description: Display string only, defaulting to `EUR`.
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601, UTC.
+        lastActivityAt:
+          type: string
+          format: date-time
+          description: |
+            ISO 8601, UTC. Updated on any write to the trip or its expenses.
+            Drives the 12-month retention job (SPEC §9).
+
+    Participant:
+      type: object
+      required: [id, name, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          description: Unique within the trip, case-insensitive, trimmed.
+        createdAt:
+          type: string
+          format: date-time
+          description: |
+            Defines the canonical participant ordering that the SPEC §5
+            rounding tie-break depends on.
+
+    Split:
+      type: object
+      description: |
+        One participant's resolved share, in integer cents. Always stored as
+        cents regardless of how it was entered (SPEC §4).
+      required: [participantId, amountCents]
+      properties:
+        participantId:
+          type: string
+        amountCents:
+          type: integer
+          minimum: 0
+          description: May be 0. Never negative.
+
+    Expense:
+      type: object
+      required:
+        [id, description, amountCents, paidBy, date, category, splitType, createdBy, createdAt, splits]
+      properties:
+        id:
+          type: string
+        description:
+          type: string
+        amountCents:
+          type: integer
+          minimum: 1
+        paidBy:
+          type: string
+          description: |
+            One participant. **Not** constrained to be in the split — someone
+            can pay for a meal they did not eat (SPEC §4).
+        date:
+          type: string
+          format: date
+          description: |
+            `YYYY-MM-DD`. Any past date is accepted, and so is any future date.
+            Defaults to today when omitted on write.
+        category:
+          oneOf:
+            - $ref: '#/components/schemas/Category'
+            - type: 'null'
+          description: Optional. `null` when unset.
+        splitType:
+          $ref: '#/components/schemas/SplitType'
+        createdBy:
+          type: string
+          description: |
+            The participant who entered it, shown as "added by <name>". Set on
+            create and never changed afterwards.
+        createdAt:
+          type: string
+          format: date-time
+        splits:
+          type: array
+          description: Resolved cents, in canonical participant order. Always sums to `amountCents`.
+          items:
+            $ref: '#/components/schemas/Split'
+
+    ExpenseInput:
+      type: object
+      description: |
+        The body for both create and replace. The frontend sends every property
+        on every request, including `exactCents` and `basisPoints` as empty
+        objects when the mode does not use them.
+
+        The server must intersect `participantIds` with the trip's actual
+        participants, silently dropping unknown ids, and then order the
+        survivors by ascending `createdAt` before resolving the split — the
+        rounding tie-break depends on that order.
+      required: [description, amountCents, paidBy, splitType, participantIds, createdBy]
+      properties:
+        description:
+          type: string
+          description: Required, non-empty after trimming.
+          example: Dinner at Ramiro
+        amountCents:
+          type: integer
+          minimum: 1
+          description: Integer cents, strictly greater than zero.
+          example: 10000
+        paidBy:
+          type: string
+          description: |
+            A participant of this trip. Need not appear in `participantIds`.
+        date:
+          type: string
+          format: date
+          description: '`YYYY-MM-DD`. Optional; defaults to today on the server.'
+          example: '2026-09-20'
+        category:
+          oneOf:
+            - $ref: '#/components/schemas/Category'
+            - type: 'null'
+          description: Optional. Send `null` for none.
+        splitType:
+          $ref: '#/components/schemas/SplitType'
+        participantIds:
+          type: array
+          minItems: 1
+          description: |
+            The participants included in the split. Defaults in the UI to
+            everyone currently in the trip, but is always sent explicitly —
+            someone who joins later is not retroactively added to earlier
+            expenses (SPEC §7.11).
+          items:
+            type: string
+        exactCents:
+          type: object
+          description: |
+            Participant id to integer cents. Read only when `splitType` is
+            `exact`, in which case the entries for included participants must
+            sum to exactly `amountCents`. Individual values may be 0 but not
+            negative. Sent as `{}` for other modes.
+          additionalProperties:
+            type: integer
+            minimum: 0
+          example:
+            p_3ijg02LqmzmW: 7500
+            p_iTk6k0Zl_U0z: 2500
+        basisPoints:
+          type: object
+          description: |
+            Participant id to integer basis points, where `3333` is 33.33%.
+            Read only when `splitType` is `percent`, in which case the entries
+            for included participants must sum to exactly `10000`. Never a
+            float (SPEC §5). Sent as `{}` for other modes.
+          additionalProperties:
+            type: integer
+            minimum: 0
+          example:
+            p_3ijg02LqmzmW: 5000
+            p_iTk6k0Zl_U0z: 2500
+            p_9aQ2vB1xKpLm: 2500
+        createdBy:
+          type: string
+          description: |
+            The participant entering the expense. Must be a participant of this
+            trip.
+
+            On `POST` this is stored. On `PUT` it is **ignored** — the original
+            author is preserved — but the client still sends it.
+
+    SplitType:
+      type: string
+      description: |
+        How the split rows were produced. Recorded for the edit form only;
+        balances and settlement never read it (SPEC §4).
+
+        - `equal` — weights are all 1, amounts derived
+        - `exact` — the entered amounts are the rows, with no distribution
+        - `percent` — weights are the integer basis points
+      enum: [equal, exact, percent]
+
+    Category:
+      type: string
+      description: |
+        Optional, from this fixed hardcoded list (SPEC §7.21). Displayed as a
+        label in the expense list; there is no category breakdown screen and no
+        per-category totals in v1.
+      enum: [food, drinks, transport, accommodation, activities, shopping, other]
+
+    Balance:
+      type: object
+      description: |
+        SPEC §6. Computed on read, never stored. Across a trip, `netCents`
+        always sums to zero.
+      required: [participantId, paidCents, owedCents, netCents]
+      properties:
+        participantId:
+          type: string
+        paidCents:
+          type: integer
+          minimum: 0
+          description: Sum of `amountCents` on expenses this participant paid.
+        owedCents:
+          type: integer
+          minimum: 0
+          description: Sum of this participant's split rows.
+        netCents:
+          type: integer
+          description: |
+            `paidCents - owedCents`. Positive means the trip owes them;
+            negative means they owe the trip.
+
+    Transfer:
+      type: object
+      description: |
+        SPEC §6. One payment in the minimised settlement list, computed greedily
+        by repeatedly matching the largest creditor against the largest debtor.
+        Ties fall back to canonical participant order so the same trip always
+        produces the same list.
+
+        Nothing here is stored and nothing can be marked paid. The product has
+        no concept of an outstanding balance once people start actually sending
+        money.
+      required: [fromParticipantId, toParticipantId, amountCents]
+      properties:
+        fromParticipantId:
+          type: string
+          description: The debtor, who sends the money.
+        toParticipantId:
+          type: string
+          description: The creditor, who receives it.
+        amountCents:
+          type: integer
+          minimum: 1
+          description: Always positive. Zero-value transfers must not appear.
+
+    TripView:
+      type: object
+      description: Everything the app needs to render a trip, in one response.
+      required: [trip, participants, expenses, balances, transfers, totalCents]
+      properties:
+        trip:
+          $ref: '#/components/schemas/Trip'
+        participants:
+          type: array
+          description: Ascending `createdAt`. This order is load-bearing for rounding.
+          items:
+            $ref: '#/components/schemas/Participant'
+        expenses:
+          type: array
+          description: Newest first, descending `createdAt` (SPEC §7.17).
+          items:
+            $ref: '#/components/schemas/Expense'
+        balances:
+          type: array
+          description: One per participant, in the same order as `participants`.
+          items:
+            $ref: '#/components/schemas/Balance'
+        transfers:
+          type: array
+          description: The minimised settlement list. Empty when everyone is square.
+          items:
+            $ref: '#/components/schemas/Transfer'
+        totalCents:
+          type: integer
+          minimum: 0
+          description: Sum of every expense in the trip.
+
+    Error:
+      type: object
+      description: |
+        The body of every non-2xx response. The client reads `code` to decide
+        what to do and shows `message` to the user verbatim.
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: |
+            Human-readable and safe to display as-is. The frontend does not
+            rewrite it.
+          example: '"Anna" is already taken in this trip. Add something to tell you apart, like "Anna B".'
+        details:
+          type: object
+          description: |
+            Optional, code-specific. Known keys:
+
+            - `field` — which request field was at fault, so the client can
+              highlight the input: `name`, `creatorName`, `description`,
+              `amountCents`, `paidBy`, `createdBy`, `participantIds`,
+              `exactCents`, `basisPoints`, `category`, `splitType`
+            - `differenceCents` — with `exact_sum_mismatch`
+            - `differenceBasisPoints` — with `percent_sum_mismatch`
+            - `paidCount`, `splitCount` — with `participant_in_use`
+            - `existingParticipantId` — with `name_taken`
+          additionalProperties: true
+
+    ErrorCode:
+      type: string
+      description: |
+        Note that `network` is produced by the client when `fetch` itself
+        fails. A server must never send it.
+      enum:
+        - not_found
+        - trip_name_empty
+        - name_empty
+        - name_taken
+        - description_empty
+        - amount_not_positive
+        - no_participants_in_split
+        - exact_sum_mismatch
+        - percent_sum_mismatch
+        - participant_in_use
+        - unknown_participant
+        - invalid_category
+        - invalid_split_type
+        - network

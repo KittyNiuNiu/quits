@@ -1,0 +1,46 @@
+# Secrets. Never commit these.
+.env
+.env.*
+!.env.example
+
+# The SQLite database is data, not source. QUITS_DATABASE_URL can point the
+# server at any filename, so cover the sidecar files WAL mode writes next to
+# each of them too.
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Frontend
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+*.local
+npm-debug.log*
+yarn-error.log*
+
+# Backend (Python, uv)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
